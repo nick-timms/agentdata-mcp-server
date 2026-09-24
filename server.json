@@ -1,0 +1,26 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.nick-timms/agentdata",
+  "title": "AgentData",
+  "description": "Company data for AI agents: tech stacks, web signals, people and switch signals.",
+  "version": "2.0.0",
+  "websiteUrl": "https://agentdata.run/docs",
+  "repository": {
+    "url": "https://github.com/nick-timms/agentdata-mcp-server",
+    "source": "github"
+  },
+  "remotes": [
+    {
+      "type": "streamable-http",
+      "url": "https://mcp.agentdata.run/mcp",
+      "headers": [
+        {
+          "name": "Authorization",
+          "description": "Optional. Bearer YOUR_API_KEY (free at agentdata.run/signup); needed for emails and people.",
+          "isRequired": false,
+          "isSecret": true
+        }
+      ]
+    }
+  ]
+}

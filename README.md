@@ -96,5 +96,7 @@ The HTTP server binds to 127.0.0.1 by default and only answers local pages, so a
 - How it works: [agentdata.run/how-it-works](https://agentdata.run/how-it-works)
 - API docs: [agentdata.run/docs](https://agentdata.run/docs)
 - The data, as it is: [agentdata.run/data](https://agentdata.run/data)
+- Guide: [Claude Code for sales prospecting, step by step](https://agentdata.run/blog/claude-code-sales-prospecting)
+- How it compares: [the best MCP servers for sales, 12 compared](https://agentdata.run/blog/best-mcp-servers-for-sales)
 
 MIT licence.
