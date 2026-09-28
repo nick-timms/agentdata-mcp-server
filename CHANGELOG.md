@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.2.0
+
+Ready for ChatGPT.
+
+- ChatGPT is recognised by OpenAI's published range for plugins, connectors and GPT Actions (`openai.com/chatgpt-connectors.json`), downloaded at start and every 12 hours. Keyless calls from there count in one `chatgpt` pool with platform-wide caps, like Claude's, instead of one per-IP allowance shared by every ChatGPT user. OpenAI's per-user id is in the request body and can be forged, so it is not used. Until the first download succeeds, ChatGPT callers count per IP. Requires the matching API release.
+- `check_usage` without a key describes what an API key adds, with a link to the docs, and no sign-up offer (OpenAI's plugin rules).
+
 ## 2.1.1
 
 Without a key, the server gives what agentdata.run shows to a visitor who is not signed in. Requires the matching API release.

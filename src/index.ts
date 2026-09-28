@@ -4,7 +4,7 @@ import { isIP } from "node:net";
 import { randomUUID, createHash } from "node:crypto";
 import { createServer } from "./server.js";
 import { VERSION } from "./api-client.js";
-import { platformFor, type Platform } from "./platform.js";
+import { platformFor, refreshOpenAiRanges, type Platform } from "./platform.js";
 
 // Command line
 const args = process.argv.slice(2);
@@ -145,6 +145,12 @@ async function startHttp() {
     console.error("agentdata-mcp-server: ignoring the startup API key in public mode; each caller must send its own Authorization: Bearer key.");
   }
 
+  // ChatGPT's published ranges: at start, then every 12 hours (public mode only).
+  if (!isLoopback) {
+    void refreshOpenAiRanges();
+    setInterval(() => { void refreshOpenAiRanges(); }, 12 * 3600 * 1000).unref();
+  }
+
   const app = express();
   app.use(express.json({ limit: "256kb" }));
 
@@ -188,7 +194,7 @@ async function startHttp() {
     const allowed = !platform
       ? takeToken(clientIp || "unknown")
       : !key
-        ? takeToken(`plat:${platform}`, platform === "claude" ? POOL_BUCKET : BUCKET)
+        ? takeToken(`plat:${platform}`, platform === "claude" || platform === "chatgpt" ? POOL_BUCKET : BUCKET)
         : takeToken(`plat:${platform}:k:${createHash("sha256").update(key).digest("hex").slice(0, 16)}`) &&
           takeToken(`plat:${platform}:keyed`, KEYED_POOL_BUCKET);
     if (!allowed) {

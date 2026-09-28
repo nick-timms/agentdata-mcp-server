@@ -3,7 +3,7 @@
   "name": "run.agentdata/agentdata",
   "title": "AgentData",
   "description": "Free company data for AI agents: profiles, tech stacks, contact details and people. No sign-in.",
-  "version": "2.1.1",
+  "version": "2.2.0",
   "websiteUrl": "https://agentdata.run/docs/mcp",
   "repository": {
     "url": "https://github.com/nick-timms/agentdata-mcp-server",
