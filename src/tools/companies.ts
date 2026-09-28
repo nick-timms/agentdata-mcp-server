@@ -2,7 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { AgentDataClient } from "../api-client.js";
 import { ok, fail } from "../format.js";
-import { sector, size, b2b, MODELS } from "./shared.js";
+import { sector, size, b2b, MODELS, readOnly } from "./shared.js";
 
 export function registerCompaniesTool(server: McpServer, client: AgentDataClient) {
   server.registerTool(
@@ -10,9 +10,10 @@ export function registerCompaniesTool(server: McpServer, client: AgentDataClient
     {
       title: "Search companies",
       description:
-        "Find companies by name or domain (query), or build a list by filters: sector, size, b2b/b2c, business model, technology used, country. " +
-        "No contact reveals and no API key needed; counts against the request window and the distinct-companies dial. " +
-        "Returns company summaries with the number of email addresses found; call lookup_company for a domain's full record.",
+        "Use this to find a company by name or part of its domain (query), or to build a list of companies by sector, business model, B2B or B2C, technology used or headquarters country. " +
+        "Returns up to 20 company summaries per page, with how many email addresses were found for each. " +
+        "Use lookup_company for one company's full record, and get_technologies to page through every company using one tool. " +
+        "Works without an API key; no contact reveals.",
       inputSchema: {
         query: z.string().optional().describe("Company name or domain fragment, e.g. 'notion' or 'stripe.com'. Used on its own; filters below are ignored when set."),
         sector,
@@ -24,7 +25,7 @@ export function registerCompaniesTool(server: McpServer, client: AgentDataClient
         country: z.string().optional().describe("Headquarters country, ISO-2 code such as US or GB"),
         page: z.number().int().min(1).optional().describe("Page number, 20 companies per page"),
       },
-      annotations: { readOnlyHint: true, openWorldHint: true },
+      annotations: readOnly("Search companies"),
     },
     async ({ query, page, ...filters }) => {
       try {

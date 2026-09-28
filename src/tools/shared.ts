@@ -17,5 +17,13 @@ export const DEPARTMENTS = [
 ] as const;
 
 export const sector = z.enum(SECTORS).optional().describe("Industry sector, exact label from the list");
-export const size = z.enum(SIZES).optional().describe("Team size band: micro (1-5 people found), small (6-20), medium (21-60), large (61+)");
+export const size = z.enum(SIZES).optional().describe("Estimate, not headcount: a band by how many people and addresses we found on the company's own website: micro (1-5), small (6-20), medium (21-60), large (61+). Large companies often publish few, so do not use it to exclude them.");
 export const b2b = z.enum(B2B).optional().describe("b2b, b2c or both");
+
+/**
+ * Every tool here only reads. Directory reviewers (Claude, ChatGPT) want all
+ * three hints stated. openWorldHint: the data describes the open web.
+ */
+export function readOnly(title: string, openWorld = true) {
+  return { title, readOnlyHint: true, destructiveHint: false, openWorldHint: openWorld } as const;
+}

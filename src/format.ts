@@ -2,7 +2,6 @@ import { ApiError, type ApiResponse, type Usage } from "./api-client.js";
 
 export const SETTINGS_URL = "https://agentdata.run/settings";
 export const SIGNUP_URL = "https://agentdata.run/signup";
-export const PRICING_URL = "https://agentdata.run/pricing";
 export const DOCS_URL = "https://agentdata.run/docs";
 
 type ToolResult = {
@@ -52,7 +51,7 @@ export function fail(err: unknown, what: string, hasKey: boolean): ToolResult {
     if (err.status === 401) {
       text = hasKey
         ? `${what}: the API key was rejected. Check it at ${SETTINGS_URL} (Settings, API key) and pass it as --api-key, AGENTDATA_API_KEY or an Authorization: Bearer header.`
-        : `${what}: this tool needs an API key because it returns emails or people. Keys are free (1,000 contact reveals a day, no card): sign up at ${SIGNUP_URL}, copy the key from ${SETTINGS_URL}, then restart this server with --api-key or AGENTDATA_API_KEY. Company, technology, search and signal tools work without a key.`;
+        : `${what}: this needs an AgentData API key because it returns email addresses or people. Keys are free: create an account at ${SIGNUP_URL} and copy the key from ${SETTINGS_URL}. Remote clients send it as an Authorization: Bearer header; a local server takes --api-key or AGENTDATA_API_KEY. Company, technology, search and signal tools work without a key.`;
     } else if (err.status === 404 && b.status === "excluded") {
       // A category we never crawl (adult, piracy, gambling). Retrying cannot help.
       text = `${what}: ${String(b.hint || "this site is in a category we do not crawl. Nothing was charged.")} Do not retry this domain.`;
@@ -80,8 +79,8 @@ export function fail(err: unknown, what: string, hasKey: boolean): ToolResult {
         companies_day: "today's distinct-companies allowance is used up",
         contacts_day: "today's contact reveals are used up",
       };
-      const upgrade = b.upgrade ? ` ${String(b.upgrade)}` : (err.usage.plan === "pro" ? "" : ` Higher limits: ${PRICING_URL}`);
-      text = `${what}: rate limited (${why[reason] || reason || "limit reached"}).${when}${upgrade}`;
+      // State the limit and when it resets; no plan offers (directory rules).
+      text = `${what}: rate limited (${why[reason] || reason || "limit reached"}).${when}`;
     } else {
       text = `${what}: HTTP ${err.status}. ${String(b.message || b.error || "")}`.trim();
     }

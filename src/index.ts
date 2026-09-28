@@ -1,8 +1,10 @@
 #!/usr/bin/env node
 
 import { isIP } from "node:net";
+import { randomUUID, createHash } from "node:crypto";
 import { createServer } from "./server.js";
 import { VERSION } from "./api-client.js";
+import { platformFor, type Platform } from "./platform.js";
 
 // Command line
 const args = process.argv.slice(2);
@@ -63,16 +65,19 @@ function normaliseIp(raw: string | undefined): string | undefined {
 
 // Per-caller token bucket and a global in-flight cap, applied before anything
 // is proxied upstream, so a flood costs this process and not the API.
-const BUCKET_CAPACITY = 20; // burst
-const BUCKET_REFILL_PER_SEC = 10; // sustained
+// An AI platform's shared pool (all of its users behind a few addresses, see
+// platform.ts) gets a larger bucket; the API applies the real daily dials.
+const BUCKET = { capacity: 20, refillPerSec: 10 };
+const POOL_BUCKET = { capacity: 200, refillPerSec: 50 };
+const KEYED_POOL_BUCKET = { capacity: 200, refillPerSec: 50 };
 const MAX_IN_FLIGHT = 100;
 const buckets = new Map<string, { tokens: number; at: number }>();
 let inFlight = 0;
 
-function takeToken(key: string): boolean {
+function takeToken(key: string, dial: { capacity: number; refillPerSec: number } = BUCKET): boolean {
   const now = Date.now();
-  const b = buckets.get(key) ?? { tokens: BUCKET_CAPACITY, at: now };
-  b.tokens = Math.min(BUCKET_CAPACITY, b.tokens + ((now - b.at) / 1000) * BUCKET_REFILL_PER_SEC);
+  const b = buckets.get(key) ?? { tokens: dial.capacity, at: now };
+  b.tokens = Math.min(dial.capacity, b.tokens + ((now - b.at) / 1000) * dial.refillPerSec);
   b.at = now;
   const ok = b.tokens >= 1;
   if (ok) b.tokens -= 1;
@@ -107,6 +112,29 @@ function callerIp(req: { headers: Record<string, string | string[] | undefined>;
     console.log(`caller address: x-real-ip ${real ? "present" : "absent"}, x-forwarded-for hops ${hops}`);
   }
   return real;
+}
+
+/** "Claude-User", "opencode/1.18" -> "opencode"; a short client label for usage logs. */
+function clientLabel(ua: string | undefined): string {
+  const first = String(ua || "").trim().split(/[\s/;(]/)[0] || "unknown";
+  return first.slice(0, 40);
+}
+
+/** JSON-RPC method names in a body (a message or a batch). */
+function methodsOf(body: unknown): string[] {
+  const messages = Array.isArray(body) ? body : [body];
+  return messages.map((m) => String((m as { method?: unknown } | null)?.method || "")).filter(Boolean);
+}
+
+// For one day after each deploy, log the header NAMES (never values) of up to
+// five requests per platform, to learn whether a platform sends a stable
+// per-user or per-conversation identifier we could rate-limit on.
+const HEADER_DIAG_UNTIL = Date.now() + 24 * 3600 * 1000;
+const headerDiagCount: Record<string, number> = {};
+function diagnoseHeaders(platform: Platform, headers: Record<string, unknown>): void {
+  if (Date.now() > HEADER_DIAG_UNTIL || (headerDiagCount[platform] || 0) >= 5) return;
+  headerDiagCount[platform] = (headerDiagCount[platform] || 0) + 1;
+  console.log(JSON.stringify({ evt: "platform_headers", platform, names: Object.keys(headers).sort() }));
 }
 
 async function startHttp() {
@@ -145,8 +173,25 @@ async function startHttp() {
 
   app.post("/mcp", async (req, res) => {
     const clientIp = callerIp(req);
+    // AI platforms are recognised in public mode only (a loopback server's callers are local).
+    const platform = isLoopback ? null : platformFor(clientIp, String(req.headers["user-agent"] || ""));
+    const auth = String(req.headers.authorization || "");
+    const bearer = /^bearer\s+(.+)$/i.exec(auth);
+    const key = bearer ? bearer[1].trim() : undefined;
+    if (platform) diagnoseHeaders(platform, req.headers as Record<string, unknown>);
 
-    if (!takeToken(clientIp || "unknown")) {
+    // Buckets. Ordinary callers: per address. Behind a platform the address is
+    // shared by all its users. Keyless calls draw on the platform's pool bucket;
+    // calls with a key draw on that key's own bucket and a separate bucket for
+    // all keyed traffic from the platform, so keyless load never blocks paying
+    // or signed-up users.
+    const allowed = !platform
+      ? takeToken(clientIp || "unknown")
+      : !key
+        ? takeToken(`plat:${platform}`, platform === "claude" ? POOL_BUCKET : BUCKET)
+        : takeToken(`plat:${platform}:k:${createHash("sha256").update(key).digest("hex").slice(0, 16)}`) &&
+          takeToken(`plat:${platform}:keyed`, KEYED_POOL_BUCKET);
+    if (!allowed) {
       res.setHeader("Retry-After", "1");
       res.status(429).json({ jsonrpc: "2.0", error: { code: -32000, message: "Too many requests to this MCP server. Retry in a second." }, id: null });
       return;
@@ -163,9 +208,18 @@ async function startHttp() {
     try {
       // The key is per request (each client brings its own). Only a loopback
       // server may fall back to the key it was started with.
-      const auth = req.headers.authorization;
-      const key = auth?.startsWith("Bearer ") ? auth.slice(7).trim() : undefined;
-      const server = createServer(key || (isLoopback ? apiKeyArg : undefined), clientIp, upstream.signal);
+      const log = { platform: platform || "direct", client: clientLabel(req.headers["user-agent"]) };
+      if (methodsOf(req.body).includes("initialize")) {
+        const info = (Array.isArray(req.body) ? req.body : [req.body]).find((m: { method?: string }) => m?.method === "initialize")?.params?.clientInfo;
+        console.log(JSON.stringify({ evt: "initialize", ...log, keyed: !!key, client_name: String(info?.name || "").slice(0, 60), client_version: String(info?.version || "").slice(0, 30) }));
+      }
+      const server = createServer(
+        key || (isLoopback ? apiKeyArg : undefined),
+        clientIp,
+        upstream.signal,
+        { platform },
+        isLoopback ? undefined : log,
+      );
       // Stateless: one server and transport per request, nothing kept between calls.
       const transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: undefined,
@@ -182,8 +236,15 @@ async function startHttp() {
       await server.connect(transport);
       await transport.handleRequest(req, res, req.body);
     } catch (err) {
-      console.error("MCP request failed:", err instanceof Error ? err.message : err);
-      if (!res.headersSent) res.status(500).json({ error: "Internal server error" });
+      const id = randomUUID().slice(0, 8);
+      console.error(`MCP request failed [${id}]:`, err instanceof Error ? err.message : err);
+      if (!res.headersSent) {
+        res.status(500).json({
+          jsonrpc: "2.0",
+          error: { code: -32603, message: `The AgentData MCP server could not handle this request (reference ${id}). Retry once; if it happens again, email support@agentdata.run with the reference.` },
+          id: null,
+        });
+      }
       if (!released) { released = true; inFlight--; }
     }
   });

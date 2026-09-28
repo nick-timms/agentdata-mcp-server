@@ -2,7 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { AgentDataClient } from "../api-client.js";
 import { ok, fail } from "../format.js";
-import { sector, size, b2b, SENIORITY, DEPARTMENTS } from "./shared.js";
+import { sector, size, b2b, SENIORITY, DEPARTMENTS, readOnly } from "./shared.js";
 
 export function registerPeopleTools(server: McpServer, client: AgentDataClient) {
   server.registerTool(
@@ -10,9 +10,9 @@ export function registerPeopleTools(server: McpServer, client: AgentDataClient) 
     {
       title: "Find people",
       description:
-        "People with names and titles, found on company team pages. Filter by title, seniority, department, whether an email or LinkedIn was found, and by company attributes (domain, sector, size, technology used). " +
-        "Costs 1 contact reveal per company in the response (max 2 people per company unless a domain is given); results are capped to the reveals you have left today. Needs an API key (free). " +
-        "Each person has an id; call get_person for one person's email.",
+        "Use this when the user wants people at companies: names and job titles found on company team, about and author pages. Filter by title, seniority, department, whether an email or LinkedIn URL was found, and by company attributes (domain, sector, technology used). " +
+        "Costs 1 contact reveal per company in the response (at most 2 people per company unless a domain is given); results are capped to the reveals left today. " +
+        "Each person has an id; use get_person for one person's email address.",
       inputSchema: {
         domain: z.string().optional().describe("Only people at this company domain"),
         q: z.string().optional().describe("Name search"),
@@ -29,7 +29,7 @@ export function registerPeopleTools(server: McpServer, client: AgentDataClient) 
         limit: z.number().int().min(1).max(100).optional().describe("Results per page, default 20, max 100"),
         offset: z.number().int().min(0).optional(),
       },
-      annotations: { readOnlyHint: true, openWorldHint: true },
+      annotations: readOnly("Find people"),
     },
     async (params) => {
       try {
@@ -45,9 +45,9 @@ export function registerPeopleTools(server: McpServer, client: AgentDataClient) 
     "get_person",
     {
       title: "Get one person",
-      description: "One person by id (from find_people or lookup_company), with their email address where we have one (use lookup_company for verification status). Costs 1 contact reveal for that person's company (free if the company was revealed in the last 30 days). Needs an API key.",
+      description: "Use this to get one person's details by id (from find_people or lookup_company), including their email address where one was found; use lookup_company for the address's verification status. Costs 1 contact reveal for that person's company, free if the company was revealed in the last 30 days.",
       inputSchema: { id: z.string().describe("Person id") },
-      annotations: { readOnlyHint: true, openWorldHint: true },
+      annotations: readOnly("Get one person"),
     },
     async ({ id }) => {
       try {

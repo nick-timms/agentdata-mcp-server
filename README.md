@@ -6,7 +6,17 @@ Works with Claude, Claude Code, ChatGPT, Codex, Gemini, Cursor, Windsurf, VS Cod
 
 ## Quick start
 
-No key is needed to search companies, browse technologies or read switch signals. Emails and people need a free API key (1,000 contact reveals a day, no card): sign up at [agentdata.run/signup](https://agentdata.run/signup) and copy the key from [agentdata.run/settings](https://agentdata.run/settings).
+No key is needed to look up a company's public profile, search companies, browse technologies or read switch signals. Emails and people need a free API key (1,000 contact reveals a day, no card): sign up at [agentdata.run/signup](https://agentdata.run/signup) and copy the key from [agentdata.run/settings](https://agentdata.run/settings).
+
+### Claude (claude.ai, Desktop, mobile)
+
+Settings, Connectors, Add custom connector, then paste:
+
+```
+https://mcp.agentdata.run/mcp
+```
+
+No sign-in: the company, technology and signal tools work straight away.
 
 ### Claude Code
 
@@ -29,7 +39,7 @@ Add to the client's MCP config (`claude_desktop_config.json`, `.cursor/mcp.json`
 }
 ```
 
-Leave out `--api-key` to run anonymously (company, technology and signal tools only).
+Leave out `--api-key` to run anonymously (company profiles, technologies and signals; no emails or people).
 
 ### Hosted (no install)
 
@@ -47,15 +57,15 @@ claude mcp add agentdata --transport http https://mcp.agentdata.run/mcp --header
 
 | Tool | What it returns | Cost | Key |
 |------|-----------------|------|-----|
-| `search_companies` | Companies by name or by sector, size, b2b/b2c, model, technology, country | none | no |
+| `lookup_company` | One domain's record: company, tech stack (first and last seen), signals, email pattern. With a key, also email addresses and people | none without a key; with a key 1 reveal per domain per 30 days | no |
+| `search_companies` | Companies by name or by sector, size (estimate), b2b/b2c, model, technology, country | none | no |
 | `get_technologies` | The technology index, or companies using one technology | none | no |
 | `get_signals` | Companies that added, removed or switched a tool; growth and hiring changes | none | no |
-| `lookup_company` | One domain's full record: company, tech stack, signals, email pattern, email addresses, people | 1 reveal per domain per 30 days | yes |
 | `find_people` | People by title, seniority, department, company filters | 1 reveal per company in the response | yes |
 | `get_person` | One person by id, with email | 1 reveal (free if the company was revealed in the last 30 days) | yes |
 | `check_usage` | Plan and what is left today | none | no |
 
-Every response ends with a usage line (reveals, requests and companies left), so an agent can pace itself. A domain that has not been profiled yet is queued at the front of the crawl and answers "retry in about two minutes" without charging.
+Every response ends with a usage line (reveals, requests and companies left), so an agent can pace itself. A domain that has not been profiled yet is crawled on request and answers "retry in about two minutes" without charging. Without a key, `find_people` and `get_person` are not listed.
 
 ## Limits
 

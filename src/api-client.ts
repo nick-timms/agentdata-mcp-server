@@ -1,5 +1,6 @@
 import { createRequire } from "node:module";
 import { createHmac } from "node:crypto";
+import type { Platform } from "./platform.js";
 
 const require = createRequire(import.meta.url);
 const pkg = require("../package.json") as { version: string };
@@ -65,6 +66,11 @@ export function readUsage(h: Headers): Usage {
 
 export type Params = Record<string, string | number | boolean | undefined | null>;
 
+/** Who is calling the hosted server, when it is an AI platform (see platform.ts). */
+export interface Caller {
+  platform?: Platform | null;
+}
+
 /**
  * Thin fetch wrapper for the AgentData REST API. The key is optional: company,
  * technology, search and signal endpoints work without one (per-IP limits);
@@ -74,6 +80,7 @@ export class AgentDataClient {
   private apiKey: string | undefined;
   private clientIp: string | undefined;
   private signal: AbortSignal | undefined;
+  private caller: Caller;
 
   /**
    * @param clientIp In HTTP mode, the caller's address. Forwarded to the API
@@ -82,11 +89,15 @@ export class AgentDataClient {
    *   this server's IP. The API accepts a signature for two minutes only.
    * @param signal Aborted when the MCP client disconnects, so an abandoned
    *   request stops costing the API.
+   * @param caller The AI platform behind the call, if any. Sent with the
+   *   address and covered by the same signature, so the API can count keyless
+   *   platform traffic in that platform's pool.
    */
-  constructor(apiKey?: string, clientIp?: string, signal?: AbortSignal) {
+  constructor(apiKey?: string, clientIp?: string, signal?: AbortSignal, caller: Caller = {}) {
     this.apiKey = apiKey?.trim() || undefined;
     this.clientIp = clientIp?.trim() || undefined;
     this.signal = signal;
+    this.caller = caller;
   }
 
   get hasKey(): boolean {
@@ -112,7 +123,13 @@ export class AgentDataClient {
       const ts = String(Math.floor(Date.now() / 1000));
       headers["X-AgentData-Client-IP"] = this.clientIp;
       headers["X-AgentData-Client-Ts"] = ts;
-      headers["X-AgentData-Client-Sig"] = createHmac("sha256", secret).update(`${this.clientIp}|${ts}`).digest("hex");
+      const platform = this.caller.platform || null;
+      let signed = `${this.clientIp}|${ts}`;
+      if (platform) {
+        headers["X-AgentData-Client-Platform"] = platform;
+        signed = `${this.clientIp}|${ts}|${platform}|`;
+      }
+      headers["X-AgentData-Client-Sig"] = createHmac("sha256", secret).update(signed).digest("hex");
     }
 
     const controller = new AbortController();
@@ -140,7 +157,8 @@ export class AgentDataClient {
     return { body, usage, status: response.status };
   }
 
-  // Company record: 1 contact reveal per domain. Key required.
+  // Company record. With a key: emails and people too, 1 contact reveal per
+  // domain per 30 days. Without one: the public profile, no reveal.
   lookup(domain: string, params: { min_confidence?: number; verification_status?: string } = {}) {
     return this.get("/lookup", { domain, ...params });
   }

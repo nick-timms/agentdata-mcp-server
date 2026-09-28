@@ -2,8 +2,8 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.nick-timms/agentdata",
   "title": "AgentData",
-  "description": "Company data for AI agents: tech stacks, web signals, people and switch signals.",
-  "version": "2.0.0",
+  "description": "Company data for AI agents: profiles, tech stacks and switch signals, no key; emails and people with a free key.",
+  "version": "2.1.0",
   "websiteUrl": "https://agentdata.run/docs",
   "repository": {
     "url": "https://github.com/nick-timms/agentdata-mcp-server",

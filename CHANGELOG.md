@@ -1,5 +1,19 @@
 # Changelog
 
+## 2.1.0
+
+Ready for the Claude directory.
+
+- Claude is recognised by Anthropic's published address range (`160.79.104.0/21`). All Claude users reach a connector from there, so keyless calls are now counted in a pool for Claude instead of sharing one per-IP allowance: `claude` for claude.ai, Desktop and mobile (User-Agent `Claude-User`), and a smaller `claude-other` pool for anything else from that range (for example the API's MCP connector). The platform is covered by the same signature (`ip|ts|platform|`). Requires the matching API release, which also sets the pool limits and can switch pools off. ChatGPT callers still count per IP; they get the same treatment with the ChatGPT listing.
+- Without a key, only tools that work without one are listed: `lookup_company` (the public profile: company, tech stack with first and last seen, signals, and how many addresses and people were found), `search_companies`, `get_technologies`, `get_signals` and `check_usage`. `find_people`, `get_person`, the email pattern and the `career_move` signal need a key.
+- Tool descriptions say when to use each tool; no prices or plan offers in descriptions or responses. Rate-limit messages state the limit and the reset only.
+- Every tool states `title`, `readOnlyHint`, `destructiveHint` and `openWorldHint`.
+- The size filter is described as what it is: an estimate from the people and addresses found on a company's website, not headcount.
+- Hosted mode logs one line per `initialize` and per tool call (tool, platform, client, keyed, duration, error), never arguments or results, so usage can be counted. For its first day it also logs the header names (not values) of a few Claude requests.
+- `Authorization: bearer` is accepted in any case.
+- A failed request returns a JSON-RPC error with a reference id instead of a bare "Internal server error".
+- `scripts/e2e-local.mjs` exercises the HTTP server against a mock API.
+
 ## 2.0.0
 
 The free model, end to end.
