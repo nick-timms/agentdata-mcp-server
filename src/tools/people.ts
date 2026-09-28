@@ -4,6 +4,42 @@ import { AgentDataClient } from "../api-client.js";
 import { ok, fail } from "../format.js";
 import { sector, size, b2b, SENIORITY, DEPARTMENTS, readOnly } from "./shared.js";
 
+/**
+ * Without a key: find_people as the public /people page gives it to a visitor
+ * who is not signed in (first 20 matches, the last 5 withheld, no email
+ * addresses), with the page's filters.
+ */
+export function registerPublicPeopleTool(server: McpServer, client: AgentDataClient) {
+  server.registerTool(
+    "find_people",
+    {
+      title: "Find people",
+      description:
+        "Use this when the user wants people at a company or in a role: names, job titles, seniority, department and LinkedIn URLs found on company team, about and author pages. Filter by company domain, name, title, seniority, department, sector or B2B/B2C. " +
+        "Without an API key it returns what the public people directory shows to a visitor who is not signed in: the first 20 matches, with the last 5 withheld, and no email addresses. Narrow the filters (for example a domain plus a title) to get the right people into that first page.",
+      inputSchema: {
+        domain: z.string().optional().describe("Only people at this company domain, e.g. stripe.com"),
+        q: z.string().optional().describe("Name search"),
+        title: z.string().optional().describe("Title contains, e.g. 'CTO', 'Head of Sales'"),
+        seniority: z.enum(SENIORITY).optional().describe("founder, executive, senior, mid or junior"),
+        department: z.enum(DEPARTMENTS).optional(),
+        has_email: z.boolean().optional().describe("Only people with an email address found (the address itself needs an API key)"),
+        has_linkedin: z.boolean().optional().describe("Only people with a LinkedIn URL"),
+        sector,
+        b2b_b2c: b2b,
+      },
+      annotations: readOnly("Find people"),
+    },
+    async (params) => {
+      try {
+        return ok(await client.people(params), client.hasKey);
+      } catch (err) {
+        return fail(err, "find_people", client.hasKey);
+      }
+    },
+  );
+}
+
 export function registerPeopleTools(server: McpServer, client: AgentDataClient) {
   server.registerTool(
     "find_people",

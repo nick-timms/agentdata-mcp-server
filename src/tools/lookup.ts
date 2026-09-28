@@ -7,16 +7,16 @@ import { readOnly } from "./shared.js";
 export function registerLookupTool(server: McpServer, client: AgentDataClient) {
   const contacts = client.hasKey
     ? "With this connection's API key it also returns the company's email address pattern, the addresses found (each with verification status, confidence and the page it was found on) and people with titles; that costs 1 contact reveal per domain per 30 days. "
-    : "Without an API key it returns the public profile and how many email addresses and people were found, not the addresses, pattern or names. ";
+    : "Without an API key it returns everything the public company page shows to a visitor who is not signed in: company facts (employees, funding stage, founded, headquarters, sales motion, tech sophistication), the email format (for example {first}.{last}@domain), general inboxes such as info@ and sales@, address and phone where listed, how many email addresses and people were found, the top people's titles, seniority and LinkedIn URLs (not names), recent activity, recent tool changes and similar companies. Personal email addresses and names need an API key; for names at a company use find_people with its domain. ";
   const title = "Look up a company";
   server.registerTool(
     "lookup_company",
     {
       title,
       description:
-        "Use this when the user asks about one specific company and you know its website domain: what it does, sector and business model, headquarters where known, the tools and technologies it runs (each with how it was detected and when it was first and last seen), and web signals (pricing page, free trial, API docs, careers). " +
+        "Use this when the user asks about one specific company and you know its website domain, for example to research an account before a call: what it does, sector and business model, headquarters where known, the tools and technologies it runs (each with how it was detected and when it was first and last seen), and web signals (pricing page, free trial, API docs, careers). " +
         contacts +
-        "A domain not profiled yet is crawled on request: the reply says when to retry, usually about two minutes, and nothing is charged. " +
+        "A domain not profiled yet is crawled on request: the reply says when to retry, usually within a few minutes, and nothing is charged. " +
         "Do not use it to find a company by name; use search_companies to get the domain first.",
       inputSchema: {
         domain: z.string().describe("Bare domain, e.g. stripe.com (no https://, no path)"),

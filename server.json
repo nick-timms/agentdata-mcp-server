@@ -3,7 +3,7 @@
   "name": "io.github.nick-timms/agentdata",
   "title": "AgentData",
   "description": "Company data for AI agents: profiles, tech stacks and switch signals, no key; emails and people with a free key.",
-  "version": "2.1.0",
+  "version": "2.1.1",
   "websiteUrl": "https://agentdata.run/docs",
   "repository": {
     "url": "https://github.com/nick-timms/agentdata-mcp-server",

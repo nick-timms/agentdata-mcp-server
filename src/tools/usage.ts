@@ -19,8 +19,8 @@ export function registerUsageTool(server: McpServer, client: AgentDataClient) {
           content: [{
             type: "text" as const,
             text: [
-              "No API key on this connection, so anonymous limits apply to lookup_company, search_companies, get_technologies and get_signals. The usage line at the end of each response shows what is left.",
-              `Email addresses and people need a free AgentData account and its API key: ${DOCS_URL}.`,
+              "No API key on this connection, so anonymous limits apply to lookup_company, search_companies, find_people, get_technologies and get_signals. The usage line at the end of each response shows what is left.",
+              `Personal email addresses, names on company lookups and more than the first page of people need a free AgentData account and its API key: ${DOCS_URL}.`,
             ].join("\n\n"),
           }],
         };

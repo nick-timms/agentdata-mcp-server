@@ -2,16 +2,16 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { AgentDataClient, VERSION, type Caller } from "./api-client.js";
 import { registerLookupTool } from "./tools/lookup.js";
 import { registerCompaniesTool } from "./tools/companies.js";
-import { registerPeopleTools } from "./tools/people.js";
+import { registerPeopleTools, registerPublicPeopleTool } from "./tools/people.js";
 import { registerTechTool } from "./tools/tech.js";
 import { registerSignalsTool } from "./tools/signals.js";
 import { registerUsageTool } from "./tools/usage.js";
 
-const INSTRUCTIONS = `AgentData: company data for AI agents, taken from companies' own websites: what a company does, the tools and technologies it runs, web signals, and, with an AgentData account, email addresses (with verification status) and people. Current coverage is at https://agentdata.run/data; do not quote a total from memory.
+const INSTRUCTIONS = `AgentData: company data for AI agents, taken from companies' own websites: what a company does, the tools and technologies it runs, web signals, company contact details and people, as on the public website; with an AgentData account, also personal email addresses (with verification status). Current coverage is at https://agentdata.run/data; do not quote a total from memory.
 
 How to use it well:
-- One company by domain: lookup_company. A company by name, or a list by sector, technology or country: search_companies. Every company using one technology: get_technologies. Companies that recently added, dropped or switched a tool: get_signals.
-- A domain that is not profiled yet is crawled on request; the reply says when to retry, usually about two minutes, and nothing is charged. Some sites (adult, piracy, gambling) are never crawled; do not retry those.
+- One company by domain: lookup_company. A company by name, or a list by sector, technology or country: search_companies. Every company using one technology: get_technologies. Companies that recently added, dropped or switched a tool: get_signals. People at a company or in a role: find_people.
+- A domain that is not profiled yet is crawled on request; the reply says when to retry, usually within a few minutes, and nothing is charged. Some sites (adult, piracy, gambling) are never crawled; do not retry those.
 - Every response ends with a usage line. When an allowance runs out, wait for the reset it names rather than retrying in a loop.
 - A field we could not find is null, not guessed; say "not found" rather than inventing a value.
 - Describe an email address by its verification status (valid, catch-all, unknown); only call it verified when the status is valid.`;
@@ -61,6 +61,7 @@ export function createServer(apiKey?: string, clientIp?: string, signal?: AbortS
   registerLookupTool(server, client);
   registerCompaniesTool(server, client);
   if (client.hasKey) registerPeopleTools(server, client);
+  else registerPublicPeopleTool(server, client);
   registerTechTool(server, client);
   registerSignalsTool(server, client);
   registerUsageTool(server, client);

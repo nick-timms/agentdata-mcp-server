@@ -255,6 +255,11 @@ async function startHttp() {
   app.get("/mcp", methodNotAllowed);
   app.delete("/mcp", methodNotAllowed);
 
+  // Claude shows a connector's icon from its server's favicon.
+  app.get("/favicon.ico", (_req, res) => {
+    res.redirect(302, "https://agentdata.run/agentdata-icon.png");
+  });
+
   app.get("/health", (_req, res) => {
     res.json({ status: "ok", server: "agentdata-mcp-server", version: VERSION });
   });
@@ -264,7 +269,7 @@ async function startHttp() {
       name: "AgentData MCP server",
       version: VERSION,
       endpoint: "POST /mcp",
-      auth: "Authorization: Bearer <api key>, optional (anonymous serves companies, technologies and signals)",
+      auth: "Authorization: Bearer <api key>, optional (without one: what the public website shows)",
       key: "https://agentdata.run/settings",
       docs: "https://agentdata.run/docs",
       source: "https://github.com/nick-timms/agentdata-mcp-server",

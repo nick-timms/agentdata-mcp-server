@@ -1,6 +1,6 @@
 {
   "name": "agentdata-mcp-server",
-  "version": "2.1.0",
+  "version": "2.1.1",
   "description": "AgentData MCP server: company data for AI agents. Company profiles, tech stacks (technographics) and tool-switch signals for any business website with no key; email addresses with verification status and people with a free key. Works in Claude, ChatGPT, Cursor and any MCP client.",
   "main": "dist/index.js",
   "type": "module",

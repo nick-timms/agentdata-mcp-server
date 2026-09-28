@@ -1,5 +1,14 @@
 # Changelog
 
+## 2.1.1
+
+Without a key, the server gives what agentdata.run shows to a visitor who is not signed in. Requires the matching API release.
+
+- `lookup_company` returns everything on the public company page: company facts (employees, funding stage, sales motion, tech sophistication, sector rank, social profiles), the email format, general inboxes (info@, sales@ and so on), address and phone where listed, the top people's titles, seniority and LinkedIn URLs (not names), recent activity, recent tool changes and similar companies. Its email count uses the page's rule, so both show the same number.
+- `find_people` is available without a key, as on the public people directory: the first 20 matches, the last 5 withheld, no email addresses, with the directory's filters (domain, name, title, seniority, department, email or LinkedIn found, sector, B2B or B2C).
+- `GET /favicon.ico` redirects to the AgentData icon, so Claude shows it for the connector.
+- On-request profiling is described as "usually within a few minutes".
+
 ## 2.1.0
 
 Ready for the Claude directory.
