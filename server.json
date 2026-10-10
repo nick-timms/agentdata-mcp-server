@@ -2,8 +2,8 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "run.agentdata/agentdata",
   "title": "AgentData",
-  "description": "Free company data for AI agents: profiles, tech stacks, contact details and people. No sign-in.",
-  "version": "2.2.0",
+  "description": "Free company data for AI agents: profiles, tech stacks with evidence, and tool changes. No sign-in.",
+  "version": "2.2.1",
   "websiteUrl": "https://agentdata.run/docs/mcp",
   "repository": {
     "url": "https://github.com/nick-timms/agentdata-mcp-server",

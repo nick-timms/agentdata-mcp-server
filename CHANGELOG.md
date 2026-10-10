@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.2.1 (registry listing only)
+
+- server.json description now leads with company and technology data: "Free company data for AI agents: profiles, tech stacks with evidence, and tool changes. No sign-in." No code change; the npm package stays at 2.2.0.
+
 ## 2.2.0
 
 Ready for ChatGPT.
