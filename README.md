@@ -8,6 +8,10 @@ Works with Claude, Claude Code, ChatGPT, Codex, Gemini, Cursor, Windsurf, VS Cod
 
 No key is needed to look up a company's public profile, search companies, browse technologies or read switch signals. Emails and people need a free API key (1,000 contact reveals a day, no card): sign up at [agentdata.run/signup](https://agentdata.run/signup) and copy the key from [agentdata.run/settings](https://agentdata.run/settings).
 
+### ChatGPT and Codex
+
+AgentData is in ChatGPT's plugin directory: open **Plugins** in the sidebar, search **AgentData** (by DragApp.com Ltd) and choose **Install plugin** ([open in ChatGPT](https://chatgpt.com/plugins/plugin_asdk_app_6aba5e34deb88191bbb7b8b09d5c5f78)). No sign-in: the company, technology and signal tools work straight away. Type `@AgentData` to use it in a chat. In Codex, open Sources, choose Use plugins and select AgentData.
+
 ### Claude (claude.ai, Desktop, mobile)
 
 Settings, Connectors, Add custom connector, then paste:
