@@ -1,29 +1,48 @@
-import http from "node:http";
-const usage = { "X-Plan": "free", "X-Lookups-Limit": "1000", "X-Lookups-Remaining": "993", "X-Lookups-Consumed": "0", "X-RateLimit-Limit": "5000", "X-RateLimit-Remaining": "4980", "X-RateLimit-Window": "5h", "X-Companies-Limit": "5000", "X-Companies-Remaining": "4979" };
-const anon = { ...usage, "X-Plan": "anonymous", "X-RateLimit-Limit": "300", "X-Companies-Limit": "200" };
-delete anon["X-Lookups-Limit"]; delete anon["X-Lookups-Remaining"]; delete anon["X-Lookups-Consumed"];
-http.createServer((req, res) => {
-  const u = new URL(req.url, "http://x"); const p = u.pathname; const key = (req.headers.authorization || "").replace("Bearer ", "");
-  const send = (status, body, h = {}) => { res.writeHead(status, { "content-type": "application/json", ...h }); res.end(JSON.stringify(body)); };
-  const h = key ? usage : anon;
-  process.stderr.write(`MOCK ${req.method} ${req.url} key=${key ? "yes" : "no"} ua=${req.headers["user-agent"]}\n`);
-  if (key === "bad") return send(401, { error: "Invalid API key" });
-  if (p === "/api/v1/me") return key ? send(200, { plan: "free", tier: "free", usage: { contacts: { used: 7, limit: 1000 } } }) : send(401, { error: "Authentication required" });
-  if (p === "/api/v1/search") return send(200, { query: u.searchParams.get("q"), results: [{ domain: "notion.so", company_name: "Notion" }], total: 1, lookups_consumed: 0 }, h);
-  if (p === "/api/v1/companies") return send(200, { companies: [{ domain: "a.com" }], total: 1, page: 1, filters: Object.fromEntries(u.searchParams) }, h);
-  if (p === "/api/v1/tech") return send(200, { technologies: [{ name: "Intercom", slug: "intercom", company_count: 5500000 }], total: 1 }, h);
-  if (p === "/api/v1/tech/intercom") return send(200, { technology: "Intercom", companies: [{ domain: "b.com" }], total: 6076, page: Number(u.searchParams.get("page") || 1) }, h);
-  if (p === "/api/v1/signals") return send(200, { signals: [], total: 0, filters: Object.fromEntries(u.searchParams) }, h);
-  if (p === "/api/v1/career-moves") return key ? send(200, { career_moves: [], total: 0, lookups_consumed: 0 }, h) : send(401, { error: "Authentication required", message: "Emails and people need a free API key" });
-  if (p === "/api/v1/lookup") {
-    if (!key) return send(401, { error: "Authentication required" });
-    const d = u.searchParams.get("domain");
-    if (d === "newdomain.io") return send(404, { error: "Domain not profiled yet", domain: d, status: "queued", retry_after_seconds: 120 }, { "Retry-After": "120" });
-    if (d === "limit.com") return send(429, { error: "rate_limited", reason: "contacts_day", message: "Daily contact reveal limit reached (1,000).", reset_in_seconds: 30000, upgrade: "Pro is 10,000 a day for $99 a year: https://agentdata.run/pricing" }, { "Retry-After": "30000", "X-Lookups-Remaining": "0" });
-    if (d === "burst.com") return send(429, { error: "rate_limited", reason: "rps", message: "Too many requests per second" }, { "Retry-After": "1", ...h });
-    return send(200, { domain: d, company: { name: "Stripe" }, emails: [], people: [{ id: "p1" }], filters: Object.fromEntries(u.searchParams) }, { ...h, "X-Lookups-Consumed": "1", "X-Lookups-Remaining": "992" });
+// A mock of useagentdata.com for local tests: /api/oauth/introspect and /api/mcp/v3/*, with the
+// same signature check as lib/mcp-auth.ts. Run: MCP_V3_SECRET=... node scripts/mock-api.mjs
+import { createServer } from "node:http";
+import { createHash, createHmac } from "node:crypto";
+
+const SECRET = process.env.MCP_V3_SECRET || "";
+const PORT = Number(process.env.MOCK_PORT || 4010);
+const USERS = { agd_live_trialkey000000000000000000: { id: "u-trial", plan: "trial" }, agd_live_noplankey00000000000000000: { id: "u-none", plan: "none" } };
+const TOKENS = { agd_at_validtoken: { user: "u-trial", resource: process.env.MCP_RESOURCE || "http://127.0.0.1:3001/mcp" }, agd_at_wrongaudience: { user: "u-trial", resource: "https://evil.example/mcp" } };
+const PLANS = { "u-trial": "trial", "u-none": "none" };
+
+const send = (res, status, body, headers = {}) => { res.writeHead(status, { "Content-Type": "application/json", ...headers }); res.end(JSON.stringify(body)); };
+
+createServer(async (req, res) => {
+  const chunks = []; for await (const c of req) chunks.push(c);
+  const body = Buffer.concat(chunks).toString();
+  const url = new URL(req.url, `http://${req.headers.host}`);
+  if (url.pathname === "/api/oauth/introspect") {
+    if (req.headers.authorization !== `Bearer ${SECRET}`) return send(res, 404, {});
+    const token = new URLSearchParams(body).get("token") || "";
+    if (USERS[token]) return send(res, 200, { active: true, via: "key", user_id: USERS[token].id });
+    if (TOKENS[token]) return send(res, 200, { active: true, via: "oauth", user_id: TOKENS[token].user, resource: TOKENS[token].resource, client_name: "Claude" });
+    return send(res, 200, { active: false });
   }
-  if (p === "/api/v1/people") return key ? send(200, { people: [{ id: "p1", full_name: "A" }], total: 1, lookups_consumed: 1, filters: Object.fromEntries(u.searchParams) }, h) : send(401, { error: "Authentication required" });
-  if (p.startsWith("/api/v1/people/")) return key ? send(200, { person: { id: p.split("/").pop(), email: "a@b.com" }, lookup: { consumed: true } }, h) : send(401, { error: "Authentication required" });
-  send(404, { error: "no route " + p });
-}).listen(4545, () => console.error("mock on 4545"));
+  if (!url.pathname.startsWith("/api/mcp/v3/")) return send(res, 404, { error: "not_found" });
+  const user = req.headers["x-agentdata-user"], ts = req.headers["x-agentdata-ts"], sig = req.headers["x-agentdata-sig"];
+  const want = createHmac("sha256", SECRET).update(`${user}|${ts}|${req.method}|${url.pathname}${url.search}|${createHash("sha256").update(body).digest("hex")}`).digest("hex");
+  if (sig !== want || Math.abs(Date.now() / 1000 - Number(ts)) > 120) return send(res, 401, { error: "bad_signature" });
+  const plan = PLANS[user] || "none";
+  const h = { "X-Plan": plan, "X-Companies-Limit": "1000", "X-Companies-Remaining": "998" };
+  const route = url.pathname.slice("/api/mcp/v3/".length);
+  if (route === "facts") return send(res, 200, { pageSize: 50, maxPages: 40, maxListCompanies: 500000, previewRows: 25, slotHoldDays: 7, newCustomerRows: 25 });
+  if (route === "me") return send(res, 200, { plan, trial: plan === "trial" ? { ends_at: "2026-11-05T00:00:00Z", days_left: 7 } : null, trial_ended_at: plan === "none" ? "2026-10-20T00:00:00Z" : null, lists: { used: 1, limit: 10, technologies: ["HubSpot"] } }, h);
+  if (route === "technologies") return send(res, 200, { matches: 1, technologies: [{ name: "HubSpot", category: "Marketing automation", companies: 314721, on_your_lists: true, too_large: false }] }, h);
+  if (route === "list") {
+    if (plan === "none" || url.searchParams.get("tool") !== "HubSpot") return send(res, 200, { technology: url.searchParams.get("tool"), preview: true, reason: plan === "none" ? "no_plan" : "not_on_your_lists", rows: [{ domain: "acme.com", found_in: "website", evidence: "Script on the page" }] }, h);
+    return send(res, 200, { technology: "HubSpot", preview: false, rows: [{ domain: "acme.com", found_in: "dns", evidence: "SPF record" }], page: Number(url.searchParams.get("page") || 0), hasMore: true }, h);
+  }
+  if (route === "lists") return plan === "none" ? send(res, 402, { error: "plan_required", trial_ended_at: "2026-10-20T00:00:00Z" }, h) : send(res, 200, { ok: true, tool: JSON.parse(body).tool, lists: { used: 2, limit: 10 } }, h);
+  if (route === "new-customers") return !url.searchParams.get("tool") && plan === "none" ? send(res, 402, { error: "plan_required", trial_ended_at: "2026-10-20T00:00:00Z" }, h) : send(res, 200, { technology: url.searchParams.get("tool"), days: 30, started_in_period: 12, rows: [{ domain: "beta.io", first_seen: "2026-10-27" }] }, h);
+  if (route === "company") return url.searchParams.get("domain") === "new.example" ? send(res, 404, { error: "not_profiled", domain: "new.example", retry_after_seconds: 300 }, h) : send(res, 200, { domain: url.searchParams.get("domain"), technologies: [], contacts: { included: plan !== "none" } }, h);
+  if (route === "downloads") {
+    if (req.method === "GET") return send(res, 200, { downloads: [] }, h);
+    const b = JSON.parse(body);
+    return b.confirm ? send(res, 200, { ok: true, id: 7, rows: 120 }, h) : send(res, 200, { tool: b.tool, rows: 120, remaining: 1000 }, h);
+  }
+  return send(res, 404, { error: "not_found" });
+}).listen(PORT, "127.0.0.1", () => console.log(`mock on ${PORT}`));

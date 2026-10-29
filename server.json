@@ -1,10 +1,10 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
-  "name": "run.agentdata/agentdata",
+  "name": "com.useagentdata/agentdata",
   "title": "AgentData",
-  "description": "Free company data for AI agents: profiles, tech stacks with evidence, and tool changes. No sign-in.",
-  "version": "2.2.1",
-  "websiteUrl": "https://agentdata.run/docs/mcp",
+  "description": "Customer lists of B2B software: every company using a technology, with evidence and dates.",
+  "version": "3.0.0",
+  "websiteUrl": "https://useagentdata.com/docs/mcp",
   "repository": {
     "url": "https://github.com/nick-timms/agentdata-mcp-server",
     "source": "github"
@@ -12,15 +12,7 @@
   "remotes": [
     {
       "type": "streamable-http",
-      "url": "https://mcp.agentdata.run/mcp",
-      "headers": [
-        {
-          "name": "Authorization",
-          "description": "Optional. Bearer YOUR_API_KEY (free at agentdata.run/signup) for personal email addresses.",
-          "isRequired": false,
-          "isSecret": true
-        }
-      ]
+      "url": "https://mcp.useagentdata.com/mcp"
     }
   ]
 }

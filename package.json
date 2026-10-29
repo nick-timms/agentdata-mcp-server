@@ -1,7 +1,7 @@
 {
   "name": "agentdata-mcp-server",
-  "version": "2.2.0",
-  "description": "AgentData MCP server: company data for AI agents. Company profiles, tech stacks (technographics) and tool-switch signals for any business website with no key; email addresses with verification status and people with a free key. Works in Claude, ChatGPT, Cursor and any MCP client.",
+  "version": "3.0.0",
+  "description": "AgentData MCP server: customer lists of B2B software for AI agents. Every company using a technology, how and when it was found, and the new customers. Needs an AgentData account.",
   "main": "dist/index.js",
   "type": "module",
   "bin": {
@@ -15,6 +15,7 @@
     "inspect": "tsc && npx @modelcontextprotocol/inspector node dist/index.js",
     "start": "node dist/index.js --http",
     "smoke": "tsc && node scripts/smoke.mjs",
+    "e2e": "tsc && node scripts/e2e-local.mjs",
     "railway:build": "npm run build",
     "prepublishOnly": "npm run build"
   },
@@ -30,28 +31,29 @@
     "model-context-protocol",
     "remote-mcp",
     "agentdata",
-    "company-data",
-    "company-enrichment",
+    "customer-lists",
+    "companies-using",
     "technographics",
     "tech-stack",
-    "lead-generation",
+    "technology-lookup",
+    "new-customers",
+    "competitor-customers",
     "sales-intelligence",
-    "email-finder",
+    "revops",
     "b2b",
     "ai-agent",
     "claude",
     "claude-connector",
     "chatgpt",
-    "cursor",
-    "free"
+    "cursor"
   ],
-  "author": "AgentData <support@agentdata.run> (https://agentdata.run)",
+  "author": "AgentData <support@useagentdata.com> (https://useagentdata.com)",
   "license": "MIT",
   "repository": {
     "type": "git",
     "url": "https://github.com/nick-timms/agentdata-mcp-server"
   },
-  "homepage": "https://agentdata.run/docs",
+  "homepage": "https://useagentdata.com/docs/mcp",
   "bugs": {
     "url": "https://github.com/nick-timms/agentdata-mcp-server/issues"
   },

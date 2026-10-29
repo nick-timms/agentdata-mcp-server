@@ -1,76 +1,118 @@
-import http from "node:http";
+// End-to-end test of the 3.0.0 HTTP server against the mock (scripts/mock-api.mjs).
+// Starts both, then checks: 401 + WWW-Authenticate with no credential, the resource metadata,
+// a key and a token accepted, a wrong-audience token refused, the seven tools listed with filled
+// descriptions, every tool callable, plan messages, the stdio bridge, and banned words.
 import { spawn } from "node:child_process";
-import { createHmac } from "node:crypto";
+import assert from "node:assert/strict";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 
-const SECRET = "test-secret";
-const seen = [];
-const mock = http.createServer((req, res) => {
-  seen.push({ url: req.url, h: req.headers });
-  res.setHeader("content-type", "application/json");
-  res.setHeader("x-ratelimit-limit", "20000"); res.setHeader("x-ratelimit-remaining", "19999"); res.setHeader("x-ratelimit-window", "5h");
-  if (req.url.startsWith("/lookup")) return res.end(JSON.stringify({ domain: "linear.app", access: "public", technologies: [{ name: "Intercom", first_seen: "2025-01-01", last_seen: "2026-09-20" }], contacts: { emails_found: 3, people_found: 2 } }));
-  res.end(JSON.stringify({ ok: true, url: req.url }));
-}).listen(4999);
+const SECRET = "test-secret-0123456789abcdef0123456789abcdef";
+const env = { ...process.env, MCP_V3_SECRET: SECRET, AGENTDATA_API_URL: "http://127.0.0.1:4010/api/mcp/v3", AGENTDATA_ISSUER: "http://127.0.0.1:4010", MCP_RESOURCE: "http://127.0.0.1:3001/mcp", PORT: "3001" };
+const kids = [spawn("node", ["scripts/mock-api.mjs"], { env, stdio: "inherit" }), spawn("node", ["dist/index.js", "--http"], { env, stdio: "inherit" })];
+const done = (code) => { for (const k of kids) k.kill(); process.exit(code); };
+await new Promise((r) => setTimeout(r, 1500));
+let n = 0;
+const t = async (name, fn) => { await fn(); n++; console.log(`ok  ${name}`); };
+const BASE = "http://127.0.0.1:3001";
+const KEY = "agd_live_trialkey000000000000000000";
+const NOPLAN = "agd_live_noplankey00000000000000000";
 
-const env = { ...process.env, AGENTDATA_API_URL: "http://127.0.0.1:4999", MCP_PROXY_SECRET: SECRET, PORT: "4998" };
-const srv = spawn("node", ["dist/index.js", "--http", "--host", "0.0.0.0"], { env });
-let logs = ""; srv.stdout.on("data", d => logs += d); srv.stderr.on("data", d => logs += d);
-await new Promise(r => setTimeout(r, 1200));
-
-async function rpc(body, headers = {}) {
-  const r = await fetch("http://127.0.0.1:4998/mcp", { method: "POST", headers: { "content-type": "application/json", accept: "application/json, text/event-stream", ...headers }, body: JSON.stringify(body) });
-  const t = await r.text();
-  const line = t.split("\n").find(l => l.startsWith("data:"));
-  return { status: r.status, json: line ? JSON.parse(line.slice(5)) : (t ? JSON.parse(t) : null) };
+async function connect(cred) {
+  const client = new Client({ name: "e2e", version: "1" });
+  await client.connect(new StreamableHTTPClientTransport(new URL(`${BASE}/mcp`), { requestInit: { headers: { Authorization: `Bearer ${cred}` } } }));
+  return client;
 }
-const init = { jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "claude-ai", version: "0.1" } } };
-const list = { jsonrpc: "2.0", id: 2, method: "tools/list" };
-const call = (name, args) => ({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name, arguments: args } });
+const text = (r) => r.content.map((c) => c.text).join("\n");
 
-const claude = { "x-real-ip": "160.79.106.180", "user-agent": "Claude-User" };
-await rpc(init, claude);
-const noKey = await rpc(list, claude);
-const names = noKey.json.result.tools.map(t => t.name);
-console.log("tools without key:", names.join(", "));
-const withKey = await rpc(list, { ...claude, authorization: "Bearer agd_live_testkey123456" });
-console.log("tools with key:", withKey.json.result.tools.map(t => t.name).join(", "));
-const bad = noKey.json.result.tools.filter(t => !(t.title && t.annotations?.title && t.annotations.readOnlyHint === true && t.annotations.destructiveHint === false && typeof t.annotations.openWorldHint === "boolean"));
-console.log("tools missing annotations:", bad.map(t => t.name));
-const sigEnum = noKey.json.result.tools.find(t => t.name === "get_signals").inputSchema.properties.type.enum;
-console.log("signal types without key include career_move:", sigEnum.includes("career_move"));
-const lk = noKey.json.result.tools.find(t => t.name === "lookup_company");
-console.log("keyless lookup params:", Object.keys(lk.inputSchema.properties));
-
-const r1 = await rpc(call("lookup_company", { domain: "https://www.Linear.app/pricing" }), claude);
-console.log("lookup text:", r1.json.result.content[0].text.slice(0, 160));
-const h = seen.at(-1).h;
-console.log("upstream:", seen.at(-1).url, "platform:", h["x-agentdata-client-platform"]);
-const expect = createHmac("sha256", SECRET).update(`${h["x-agentdata-client-ip"]}|${h["x-agentdata-client-ts"]}|claude|`).digest("hex");
-console.log("claude signature valid (ip|ts|platform|subject):", expect === h["x-agentdata-client-sig"]);
-
-// other traffic from Anthropic's range (API connector): its own smaller pool
-await rpc(call("search_companies", { query: "x" }), { "x-real-ip": "160.79.106.9", "user-agent": "anthropic-api/1.0" });
-console.log("api-connector platform:", seen.at(-1).h["x-agentdata-client-platform"]);
-// lowercase bearer is a key
-const lower = await rpc(list, { ...claude, authorization: "bearer agd_live_testkey123456" });
-console.log("lowercase bearer lists people tools:", lower.json.result.tools.some(t => t.name === "find_people"));
-// ordinary caller: v1 signature, no platform header
-await rpc(call("search_companies", { query: "notion" }), { "x-real-ip": "203.0.113.9", "user-agent": "opencode/1.18.32" });
-const h2 = seen.at(-1).h;
-console.log("ordinary caller platform header:", h2["x-agentdata-client-platform"] ?? "(none)", "v1 sig valid:", createHmac("sha256", SECRET).update(`203.0.113.9|${h2["x-agentdata-client-ts"]}`).digest("hex") === h2["x-agentdata-client-sig"]);
-
-const u = await rpc(call("check_usage", {}), claude);
-console.log("check_usage (no key):", u.json.result.content[0].text.replace(/\n+/g, " | "));
-console.log("mentions price/Pro:", /\$|pro\b|pricing/i.test(u.json.result.content[0].text));
-
-// pool bucket: 60 quick calls from Claude should not trip the local limiter
-let limited = 0;
-await Promise.all(Array.from({ length: 60 }, () => rpc(list, claude).then(r => { if (r.status === 429) limited++; })));
-console.log("429s in 60 parallel Claude pool calls:", limited);
-let limitedOrdinary = 0;
-await Promise.all(Array.from({ length: 60 }, () => rpc(list, { "x-real-ip": "203.0.113.10" }).then(r => { if (r.status === 429) limitedOrdinary++; })));
-console.log("429s in 60 parallel calls from one ordinary IP:", limitedOrdinary);
-
-console.log("--- log lines");
-console.log(logs.split("\n").filter(l => /tool_call|initialize|platform_headers|platform ranges/.test(l)).slice(0, 8).join("\n"));
-srv.kill(); mock.close(); process.exit(0);
+try {
+  await t("401 without a credential, with WWW-Authenticate", async () => {
+    const r = await fetch(`${BASE}/mcp`, { method: "POST", headers: { "Content-Type": "application/json", Accept: "application/json, text/event-stream" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "x", version: "1" } } }) });
+    assert.equal(r.status, 401);
+    assert.match(r.headers.get("www-authenticate") || "", /resource_metadata="http:\/\/127\.0\.0\.1:3001\/\.well-known\/oauth-protected-resource\/mcp", scope="agentdata"/);
+  });
+  await t("401 for an unknown key", async () => {
+    const r = await fetch(`${BASE}/mcp`, { method: "POST", headers: { Authorization: "Bearer agd_live_nope", "Content-Type": "application/json", Accept: "application/json, text/event-stream" }, body: "{}" });
+    assert.equal(r.status, 401);
+  });
+  await t("401 for a token issued for another resource", async () => {
+    const r = await fetch(`${BASE}/mcp`, { method: "POST", headers: { Authorization: "Bearer agd_at_wrongaudience", "Content-Type": "application/json", Accept: "application/json, text/event-stream" }, body: "{}" });
+    assert.equal(r.status, 401);
+  });
+  await t("protected resource metadata at both paths", async () => {
+    for (const p of ["/.well-known/oauth-protected-resource", "/.well-known/oauth-protected-resource/mcp"]) {
+      const j = await (await fetch(`${BASE}${p}`)).json();
+      assert.equal(j.resource, "http://127.0.0.1:3001/mcp");
+      assert.deepEqual(j.authorization_servers, ["http://127.0.0.1:4010"]);
+    }
+  });
+  const c = await connect(KEY);
+  await t("seven tools, filled descriptions, hints and security schemes", async () => {
+    const { tools } = await c.listTools();
+    assert.deepEqual(tools.map((x) => x.name).sort(), ["add_to_lists", "check_usage", "download_list", "find_technologies", "get_customer_list", "get_new_customers", "lookup_company"]);
+    for (const x of tools) {
+      assert.ok(!/\{\w+\}/.test(x.description), `${x.name} has an unfilled placeholder`);
+      for (const h of ["readOnlyHint", "destructiveHint", "openWorldHint"]) assert.equal(typeof x.annotations[h], "boolean", `${x.name} ${h}`);
+      assert.ok(x._meta?.securitySchemes, `${x.name} securitySchemes`);
+    }
+    assert.match(tools.find((x) => x.name === "get_customer_list").description, /Returns 50 companies a page/);
+  });
+  await t("banned words never appear in tool text or instructions", async () => {
+    const { tools } = await c.listTools();
+    const all = [c.getInstructions() || "", ...tools.map((x) => `${x.title} ${x.description} ${JSON.stringify(x.inputSchema)}`)].join("\n").toLowerCase();
+    for (const w of ["switched", "stopped", "wappalyzer", "upgrade", "verified email", "\u2014"]) assert.ok(!all.includes(w), `found "${w}"`);
+    // "free" only as the companies' own "free trial" website signal, never about AgentData.
+    assert.ok(!/\bfree\b(?![ _]trial)/.test(all), "found free outside free trial");
+  });
+  await t("every tool answers", async () => {
+    const calls = [["check_usage", {}], ["find_technologies", { query: "hubspot" }], ["get_customer_list", { technology: "HubSpot", country: "GB" }], ["add_to_lists", { technology: "Front" }], ["get_new_customers", { technology: "HubSpot", days: "7" }], ["lookup_company", { domain: "https://www.acme.com/about" }], ["download_list", { technology: "HubSpot" }], ["download_list", { technology: "HubSpot", confirm: true }]];
+    for (const [name, a] of calls) {
+      const r = await c.callTool({ name, arguments: a });
+      assert.ok(!r.isError, `${name}: ${text(r)}`);
+      assert.match(text(r), /usage: plan trial/);
+    }
+  });
+  await t("preview note, queued domain", async () => {
+    assert.match(text(await c.callTool({ name: "get_customer_list", arguments: { technology: "Zendesk" } })), /public preview/);
+    const q = await c.callTool({ name: "lookup_company", arguments: { domain: "new.example" } });
+    assert.ok(!q.isError); assert.match(text(q), /queued/);
+  });
+  await c.close();
+  await t("an OAuth token for this server works", async () => {
+    const o = await connect("agd_at_validtoken");
+    assert.ok(!(await o.callTool({ name: "check_usage", arguments: {} })).isError);
+    await o.close();
+  });
+  await t("no-plan account: plan message, /pricing, no trial offer", async () => {
+    const p = await connect(NOPLAN);
+    const r = await p.callTool({ name: "add_to_lists", arguments: { technology: "HubSpot" } });
+    assert.ok(r.isError);
+    assert.match(text(r), /trial ended on 20 Oct 2026/);
+    assert.match(text(r), /useagentdata\.com\/pricing/);
+    assert.ok(!/upgrade|start a/i.test(text(r)));
+    await p.close();
+  });
+  await t("stdio bridge", async () => {
+    const kid = spawn("node", ["dist/index.js", "--api-key", KEY], { env: { ...env, AGENTDATA_MCP_URL: `${BASE}/mcp` } });
+    const lines = [];
+    kid.stdout.on("data", (d) => lines.push(...d.toString().split("\n").filter(Boolean)));
+    kid.stdin.write(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "x", version: "1" } } }) + "\n");
+    kid.stdin.write(JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list" }) + "\n");
+    await new Promise((r) => setTimeout(r, 1500));
+    kid.kill();
+    const byId = Object.fromEntries(lines.map((l) => JSON.parse(l)).map((m) => [m.id, m]));
+    assert.equal(byId[1].result.serverInfo.name, "agentdata");
+    assert.equal(byId[2].result.tools.length, 7);
+  });
+  await t("stdio bridge without a key exits with a message", async () => {
+    const kid = spawn("node", ["dist/index.js"], { env: { ...env, AGENTDATA_API_KEY: "" } });
+    let err = ""; kid.stderr.on("data", (d) => (err += d));
+    const code = await new Promise((r) => kid.on("exit", r));
+    assert.equal(code, 1); assert.match(err, /needs an API key/);
+  });
+  console.log(`\n${n} checks passed`);
+  done(0);
+} catch (e) {
+  console.error(e);
+  done(1);
+}

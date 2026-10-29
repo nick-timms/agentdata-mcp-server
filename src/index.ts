@@ -1,14 +1,21 @@
 #!/usr/bin/env node
-
+/**
+ * AgentData MCP server 3.0.0 (claude/MCP_V3_SPEC_2026-10-29.md).
+ *
+ *   --http   the hosted server (mcp.useagentdata.com): every request needs a credential, an OAuth
+ *            access token from useagentdata.com or an agd_live_ API key, checked by introspection.
+ *   (stdio)  a bridge for local MCP clients: each message goes to the hosted server with your key.
+ */
 import { isIP } from "node:net";
-import { randomUUID, createHash } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { createServer } from "./server.js";
-import { VERSION } from "./api-client.js";
-import { platformFor, refreshOpenAiRanges, type Platform } from "./platform.js";
+import { AgentDataClient, VERSION } from "./api-client.js";
+import { bearerOf, introspect, protectedResourceMetadata, RESOURCE, WWW_AUTHENTICATE, type Who } from "./auth.js";
+import { loadFacts } from "./facts.js";
+import { platformFor } from "./platform.js";
+import { DOCS_URL, SETTINGS_URL } from "./format.js";
 
-// Command line
 const args = process.argv.slice(2);
-
 function getArg(name: string): string | undefined {
   const index = args.indexOf(name);
   if (index !== -1 && index + 1 < args.length) return args[index + 1];
@@ -18,63 +25,93 @@ function getArg(name: string): string | undefined {
 
 const httpMode = args.includes("--http");
 const port = Number(getArg("--port") || process.env.PORT || "3001");
-// Loopback unless told otherwise. A local HTTP server may hold its owner's key,
-// so it must not be reachable from the network. The hosted server passes
-// --host 0.0.0.0 (see start.js).
 const host = getArg("--host") || process.env.HOST || "127.0.0.1";
-const isLoopback = host === "127.0.0.1" || host === "localhost" || host === "::1";
-const apiKeyArg = getArg("--api-key") || process.env.AGENTDATA_API_KEY;
+const apiKey = (getArg("--api-key") || process.env.AGENTDATA_API_KEY || "").trim();
+const remote = (getArg("--url") || process.env.AGENTDATA_MCP_URL || RESOURCE).replace(/\/+$/, "");
 
 if (args.includes("--help") || args.includes("-h")) {
   console.log(`AgentData MCP server ${VERSION}
 
 Usage:
-  agentdata-mcp-server                          stdio, anonymous (companies, technologies, signals)
-  agentdata-mcp-server --api-key YOUR_KEY       stdio with a key (adds emails and people)
-  agentdata-mcp-server --http [--port 3001]     Streamable HTTP on POST /mcp, bound to 127.0.0.1
-                       [--host 0.0.0.0]         bind all interfaces (public mode: every caller
-                                                must send its own Authorization: Bearer key)
+  agentdata-mcp-server --api-key YOUR_KEY     stdio, for local MCP clients: a bridge to ${RESOURCE}
+  agentdata-mcp-server --http [--port 3001]   the hosted server (needs MCP_V3_SECRET)
+
+Remote clients don't need this package: add ${RESOURCE} as a connector and connect your
+AgentData account, or send "Authorization: Bearer YOUR_KEY".
 
 Environment:
-  AGENTDATA_API_KEY    same as --api-key (stdio, or a loopback-only HTTP server)
-  PORT, HOST           same as --port, --host
+  AGENTDATA_API_KEY    same as --api-key
+  PORT, HOST           same as --port, --host (hosted: --host 0.0.0.0, see start.js)
 
-A key is free: https://agentdata.run/signup, then https://agentdata.run/settings
-Docs: https://agentdata.run/docs`);
+Your key: ${SETTINGS_URL}
+Docs: ${DOCS_URL}`);
   process.exit(0);
 }
 
-if (!httpMode && !apiKeyArg) {
-  // Not an error: anonymous mode serves the keyless tools. Say so once, on stderr,
-  // so it never corrupts the stdio transport.
-  console.error(`agentdata-mcp-server ${VERSION}: no API key, running anonymously (no emails or people). Get a free key at https://agentdata.run/settings and pass --api-key or AGENTDATA_API_KEY.`);
+// ── stdio: a bridge to the hosted server ──────────────────────────────────────────────────
+
+async function startStdioBridge() {
+  if (!apiKey) {
+    console.error(`AgentData needs an API key: find it at ${SETTINGS_URL}, then pass --api-key or set AGENTDATA_API_KEY.`);
+    process.exit(1);
+  }
+  const { createInterface } = await import("node:readline");
+  const rl = createInterface({ input: process.stdin, crlfDelay: Infinity });
+  const write = (m: unknown) => process.stdout.write(`${JSON.stringify(m)}\n`);
+  let protocol: string | undefined;
+
+  rl.on("line", async (line) => {
+    const text = line.trim();
+    if (!text) return;
+    let msg: { id?: unknown; method?: string; params?: { protocolVersion?: string } };
+    try { msg = JSON.parse(text); } catch { return; }
+    if (msg.method === "initialize" && msg.params?.protocolVersion) protocol = msg.params.protocolVersion;
+    try {
+      const res = await fetch(remote, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json, text/event-stream",
+          Authorization: `Bearer ${apiKey}`,
+          "User-Agent": `agentdata-mcp-server/${VERSION} (stdio bridge)`,
+          ...(protocol ? { "MCP-Protocol-Version": protocol } : {}),
+        },
+        body: text,
+      });
+      if (res.status === 202) return;
+      const body = await res.text();
+      if (res.status === 401) {
+        if (msg.id !== undefined) write({ jsonrpc: "2.0", id: msg.id, error: { code: -32001, message: `The AgentData API key was not accepted. Check it at ${SETTINGS_URL}.` } });
+        return;
+      }
+      const type = res.headers.get("content-type") || "";
+      if (type.includes("text/event-stream")) {
+        for (const l of body.split(/\r?\n/)) if (l.startsWith("data:")) { const d = l.slice(5).trim(); if (d) process.stdout.write(`${d}\n`); }
+      } else if (body.trim()) {
+        process.stdout.write(`${body.trim()}\n`);
+      }
+    } catch (err) {
+      if (msg.id !== undefined) write({ jsonrpc: "2.0", id: msg.id, error: { code: -32603, message: `Could not reach ${remote} (${err instanceof Error ? err.message : String(err)}).` } });
+    }
+  });
 }
 
-async function startStdio() {
-  const { StdioServerTransport } = await import("@modelcontextprotocol/sdk/server/stdio.js");
-  const server = createServer(apiKeyArg);
-  await server.connect(new StdioServerTransport());
-}
+// ── HTTP: the hosted server ───────────────────────────────────────────────────────────────
 
-/** "::ffff:1.2.3.4" -> "1.2.3.4"; anything that is not an IP address -> undefined. */
 function normaliseIp(raw: string | undefined): string | undefined {
   if (!raw) return undefined;
   const ip = raw.trim().replace(/^::ffff:(?=\d+\.\d+\.\d+\.\d+$)/, "");
   return isIP(ip) ? ip : undefined;
 }
 
-// Per-caller token bucket and a global in-flight cap, applied before anything
-// is proxied upstream, so a flood costs this process and not the API.
-// An AI platform's shared pool (all of its users behind a few addresses, see
-// platform.ts) gets a larger bucket; the API applies the real daily dials.
-const BUCKET = { capacity: 20, refillPerSec: 10 };
-const POOL_BUCKET = { capacity: 200, refillPerSec: 50 };
-const KEYED_POOL_BUCKET = { capacity: 200, refillPerSec: 50 };
+// Per-account token bucket and a global in-flight cap, applied before anything goes upstream.
+const BUCKET = { capacity: 30, refillPerSec: 10 };
+const ANON_BUCKET = { capacity: 20, refillPerSec: 5 };
 const MAX_IN_FLIGHT = 100;
 const buckets = new Map<string, { tokens: number; at: number }>();
 let inFlight = 0;
 
-function takeToken(key: string, dial: { capacity: number; refillPerSec: number } = BUCKET): boolean {
+function takeToken(key: string, dial = BUCKET): boolean {
   const now = Date.now();
   const b = buckets.get(key) ?? { tokens: dial.capacity, at: now };
   b.tokens = Math.min(dial.capacity, b.tokens + ((now - b.at) / 1000) * dial.refillPerSec);
@@ -84,156 +121,91 @@ function takeToken(key: string, dial: { capacity: number; refillPerSec: number }
   buckets.set(key, b);
   return ok;
 }
-
-// Buckets idle for a minute are full again; drop them so the map cannot grow without bound.
 setInterval(() => {
   const cutoff = Date.now() - 60_000;
   for (const [k, b] of buckets) if (b.at < cutoff) buckets.delete(k);
 }, 60_000).unref();
 
-const LOCAL_ORIGIN = /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/;
-
-let loggedAddressSource = false;
-
-/**
- * The caller's address, or undefined when it cannot be known for certain.
- * Loopback: the socket. Public (behind Railway): X-Real-IP, which Railway's edge
- * documents as the client's address. X-Forwarded-For is not documented by
- * Railway and its last hop is Railway's own proxy, so it is never used. With no
- * trustworthy address the server signs nothing and the API counts the call
- * against this server's own address: stricter, never forgeable.
- */
-function callerIp(req: { headers: Record<string, string | string[] | undefined>; socket: { remoteAddress?: string } }): string | undefined {
-  if (isLoopback) return normaliseIp(req.socket.remoteAddress);
-  const real = normaliseIp(String(req.headers["x-real-ip"] || ""));
-  if (!loggedAddressSource) {
-    loggedAddressSource = true;
-    const hops = String(req.headers["x-forwarded-for"] || "").split(",").filter((s) => s.trim()).length;
-    console.log(`caller address: x-real-ip ${real ? "present" : "absent"}, x-forwarded-for hops ${hops}`);
-  }
-  return real;
-}
-
-/** "Claude-User", "opencode/1.18" -> "opencode"; a short client label for usage logs. */
-function clientLabel(ua: string | undefined): string {
-  const first = String(ua || "").trim().split(/[\s/;(]/)[0] || "unknown";
-  return first.slice(0, 40);
-}
-
-/** JSON-RPC method names in a body (a message or a batch). */
-function methodsOf(body: unknown): string[] {
-  const messages = Array.isArray(body) ? body : [body];
-  return messages.map((m) => String((m as { method?: unknown } | null)?.method || "")).filter(Boolean);
-}
-
-// For one day after each deploy, log the header NAMES (never values) of up to
-// five requests per platform, to learn whether a platform sends a stable
-// per-user or per-conversation identifier we could rate-limit on.
-const HEADER_DIAG_UNTIL = Date.now() + 24 * 3600 * 1000;
-const headerDiagCount: Record<string, number> = {};
-function diagnoseHeaders(platform: Platform, headers: Record<string, unknown>): void {
-  if (Date.now() > HEADER_DIAG_UNTIL || (headerDiagCount[platform] || 0) >= 5) return;
-  headerDiagCount[platform] = (headerDiagCount[platform] || 0) + 1;
-  console.log(JSON.stringify({ evt: "platform_headers", platform, names: Object.keys(headers).sort() }));
-}
+const clientLabel = (ua: string | undefined) => (String(ua || "").trim().split(/[\s/;(]/)[0] || "unknown").slice(0, 40);
 
 async function startHttp() {
   const { default: express } = await import("express");
   const { StreamableHTTPServerTransport } = await import("@modelcontextprotocol/sdk/server/streamableHttp.js");
 
-  if (!isLoopback && apiKeyArg) {
-    console.error("agentdata-mcp-server: ignoring the startup API key in public mode; each caller must send its own Authorization: Bearer key.");
+  // The numbers tool descriptions quote come from the website; don't start without them.
+  for (let attempt = 1; ; attempt++) {
+    try { await loadFacts(); break; } catch (err) {
+      if (attempt >= 5) { console.error("Could not load facts from the website:", err instanceof Error ? err.message : err); process.exit(1); }
+      await new Promise((r) => setTimeout(r, attempt * 2000));
+    }
   }
-
-  // ChatGPT's published ranges: at start, then every 12 hours (public mode only).
-  if (!isLoopback) {
-    void refreshOpenAiRanges();
-    setInterval(() => { void refreshOpenAiRanges(); }, 12 * 3600 * 1000).unref();
-  }
+  setInterval(() => { loadFacts().catch((e) => console.error("facts refresh failed:", e instanceof Error ? e.message : e)); }, 3600_000).unref();
 
   const app = express();
+  app.disable("x-powered-by");
   app.use(express.json({ limit: "256kb" }));
-
-  // CORS. Public mode serves browser-based MCP clients from any site; the hosted
-  // server holds no key of its own, so a page gains nothing it could not do
-  // directly. A loopback server may hold its owner's key, so only local pages
-  // may call it, and any other Origin is refused outright.
-  app.use((req, res, next) => {
-    const origin = req.headers.origin;
-    if (isLoopback) {
-      if (origin && !LOCAL_ORIGIN.test(origin)) {
-        res.status(403).json({ error: "Origin not allowed for a local server" });
-        return;
-      }
-      if (origin) res.setHeader("Access-Control-Allow-Origin", origin);
-      res.setHeader("Vary", "Origin");
-    } else {
-      res.setHeader("Access-Control-Allow-Origin", "*");
-    }
+  app.use((_req, res, next) => {
+    res.setHeader("Access-Control-Allow-Origin", "*");
     res.setHeader("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
     res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, Accept, Mcp-Session-Id, Mcp-Protocol-Version");
-    res.setHeader("Access-Control-Expose-Headers", "Mcp-Session-Id");
+    res.setHeader("Access-Control-Expose-Headers", "Mcp-Session-Id, WWW-Authenticate");
     next();
   });
-  app.options("/mcp", (_req, res) => { res.sendStatus(204); });
+  app.options(/.*/, (_req, res) => { res.sendStatus(204); });
+
+  // RFC 9728 protected resource metadata, at the root and at the MCP path.
+  const prm = (_req: unknown, res: { json: (b: unknown) => void; setHeader: (k: string, v: string) => void }) => {
+    res.setHeader("Cache-Control", "public, max-age=3600");
+    res.json(protectedResourceMetadata());
+  };
+  app.get("/.well-known/oauth-protected-resource", prm);
+  app.get("/.well-known/oauth-protected-resource/mcp", prm);
+
+  // ChatGPT's domain check for this host (the token comes from the OpenAI portal).
+  app.get("/.well-known/openai-apps-challenge", (_req, res) => {
+    const token = (process.env.OPENAI_APPS_CHALLENGE || "").trim();
+    if (!token) { res.sendStatus(404); return; }
+    res.type("text/plain").send(token);
+  });
+
+  const unauthorized = (res: { status: (n: number) => { json: (b: unknown) => void }; setHeader: (k: string, v: string) => void }, why: string) => {
+    res.setHeader("WWW-Authenticate", WWW_AUTHENTICATE);
+    res.status(401).json({ jsonrpc: "2.0", error: { code: -32001, message: `${why} Connect your AgentData account: ${DOCS_URL}` }, id: null });
+  };
 
   app.post("/mcp", async (req, res) => {
-    const clientIp = callerIp(req);
-    // AI platforms are recognised in public mode only (a loopback server's callers are local).
-    const platform = isLoopback ? null : platformFor(clientIp, String(req.headers["user-agent"] || ""));
-    const auth = String(req.headers.authorization || "");
-    const bearer = /^bearer\s+(.+)$/i.exec(auth);
-    const key = bearer ? bearer[1].trim() : undefined;
-    if (platform) diagnoseHeaders(platform, req.headers as Record<string, unknown>);
+    const ip = normaliseIp(String(req.headers["x-real-ip"] || "")) || normaliseIp(req.socket.remoteAddress);
+    const ua = String(req.headers["user-agent"] || "");
+    const credential = bearerOf(req.headers.authorization);
+    if (!credential) {
+      if (!takeToken(`ip:${ip || "unknown"}`, ANON_BUCKET)) { res.setHeader("Retry-After", "1"); res.status(429).json({ jsonrpc: "2.0", error: { code: -32000, message: "Too many requests. Retry in a second." }, id: null }); return; }
+      unauthorized(res, "AgentData needs an account.");
+      return;
+    }
+    let who: Who | null;
+    try {
+      who = await introspect(credential);
+    } catch {
+      res.setHeader("Retry-After", "5");
+      res.status(503).json({ jsonrpc: "2.0", error: { code: -32000, message: "AgentData couldn't check this connection just now. Retry in a few seconds." }, id: null });
+      return;
+    }
+    if (!who) { unauthorized(res, "This AgentData connection is not valid (a new API key, or a disconnected app)."); return; }
 
-    // Buckets. Ordinary callers: per address. Behind a platform the address is
-    // shared by all its users. Keyless calls draw on the platform's pool bucket;
-    // calls with a key draw on that key's own bucket and a separate bucket for
-    // all keyed traffic from the platform, so keyless load never blocks paying
-    // or signed-up users.
-    const allowed = !platform
-      ? takeToken(clientIp || "unknown")
-      : !key
-        ? takeToken(`plat:${platform}`, platform === "claude" || platform === "chatgpt" ? POOL_BUCKET : BUCKET)
-        : takeToken(`plat:${platform}:k:${createHash("sha256").update(key).digest("hex").slice(0, 16)}`) &&
-          takeToken(`plat:${platform}:keyed`, KEYED_POOL_BUCKET);
-    if (!allowed) {
-      res.setHeader("Retry-After", "1");
-      res.status(429).json({ jsonrpc: "2.0", error: { code: -32000, message: "Too many requests to this MCP server. Retry in a second." }, id: null });
-      return;
-    }
-    if (inFlight >= MAX_IN_FLIGHT) {
-      res.setHeader("Retry-After", "2");
-      res.status(503).json({ jsonrpc: "2.0", error: { code: -32000, message: "Server busy. Retry in a few seconds." }, id: null });
-      return;
-    }
+    if (!takeToken(`u:${who.userId}`)) { res.setHeader("Retry-After", "1"); res.status(429).json({ jsonrpc: "2.0", error: { code: -32000, message: "Too many requests to this MCP server. Retry in a second." }, id: null }); return; }
+    if (inFlight >= MAX_IN_FLIGHT) { res.setHeader("Retry-After", "2"); res.status(503).json({ jsonrpc: "2.0", error: { code: -32000, message: "Server busy. Retry in a few seconds." }, id: null }); return; }
 
     inFlight++;
     let released = false;
     const upstream = new AbortController();
     try {
-      // The key is per request (each client brings its own). Only a loopback
-      // server may fall back to the key it was started with.
-      const log = { platform: platform || "direct", client: clientLabel(req.headers["user-agent"]) };
-      if (methodsOf(req.body).includes("initialize")) {
-        const info = (Array.isArray(req.body) ? req.body : [req.body]).find((m: { method?: string }) => m?.method === "initialize")?.params?.clientInfo;
-        console.log(JSON.stringify({ evt: "initialize", ...log, keyed: !!key, client_name: String(info?.name || "").slice(0, 60), client_version: String(info?.version || "").slice(0, 30) }));
-      }
-      const server = createServer(
-        key || (isLoopback ? apiKeyArg : undefined),
-        clientIp,
-        upstream.signal,
-        { platform },
-        isLoopback ? undefined : log,
-      );
-      // Stateless: one server and transport per request, nothing kept between calls.
-      const transport = new StreamableHTTPServerTransport({
-        sessionIdGenerator: undefined,
-        // DNS-rebinding protection for local servers: only these Host headers are served.
-        ...(isLoopback ? { enableDnsRebindingProtection: true, allowedHosts: [`127.0.0.1:${port}`, `localhost:${port}`, `[::1]:${port}`] } : {}),
-      });
+      const log = { platform: platformFor(ip, ua), client: clientLabel(ua), via: who.via };
+      const messages = Array.isArray(req.body) ? req.body : [req.body];
+      const init = messages.find((m: { method?: string }) => m?.method === "initialize");
+      if (init) console.log(JSON.stringify({ evt: "initialize", ...log, client_name: String(init?.params?.clientInfo?.name || "").slice(0, 60), client_version: String(init?.params?.clientInfo?.version || "").slice(0, 30) }));
+      const server = createServer(new AgentDataClient(who.userId, upstream.signal), log);
+      const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
       res.on("close", () => {
-        // Also fires after a normal response; aborting a finished fetch is a no-op.
         upstream.abort();
         void transport.close();
         void server.close();
@@ -244,50 +216,29 @@ async function startHttp() {
     } catch (err) {
       const id = randomUUID().slice(0, 8);
       console.error(`MCP request failed [${id}]:`, err instanceof Error ? err.message : err);
-      if (!res.headersSent) {
-        res.status(500).json({
-          jsonrpc: "2.0",
-          error: { code: -32603, message: `The AgentData MCP server could not handle this request (reference ${id}). Retry once; if it happens again, email support@agentdata.run with the reference.` },
-          id: null,
-        });
-      }
+      if (!res.headersSent) res.status(500).json({ jsonrpc: "2.0", error: { code: -32603, message: `The AgentData MCP server could not handle this request (reference ${id}). Retry once; if it happens again, email support@useagentdata.com with the reference.` }, id: null });
       if (!released) { released = true; inFlight--; }
     }
   });
 
   const methodNotAllowed = (_req: unknown, res: { status: (n: number) => { json: (b: unknown) => void } }) => {
-    res.status(405).json({ error: "Use POST /mcp (Streamable HTTP, stateless). Server-sent event streams are not offered." });
+    res.status(405).json({ error: "Use POST /mcp (Streamable HTTP, stateless)." });
   };
   app.get("/mcp", methodNotAllowed);
   app.delete("/mcp", methodNotAllowed);
 
-  // Claude shows a connector's icon from its server's favicon.
-  app.get("/favicon.ico", (_req, res) => {
-    res.redirect(302, "https://agentdata.run/agentdata-icon.png");
-  });
-
-  app.get("/health", (_req, res) => {
-    res.json({ status: "ok", server: "agentdata-mcp-server", version: VERSION });
-  });
-
+  app.get("/favicon.ico", (_req, res) => { res.redirect(302, "https://useagentdata.com/agentdata-icon.png"); });
+  app.get("/health", (_req, res) => { res.json({ status: "ok", server: "agentdata-mcp-server", version: VERSION }); });
   app.get("/", (_req, res) => {
-    res.json({
-      name: "AgentData MCP server",
-      version: VERSION,
-      endpoint: "POST /mcp",
-      auth: "Authorization: Bearer <api key>, optional (without one: what the public website shows)",
-      key: "https://agentdata.run/settings",
-      docs: "https://agentdata.run/docs",
-      source: "https://github.com/nick-timms/agentdata-mcp-server",
-    });
+    res.json({ name: "AgentData MCP server", version: VERSION, endpoint: "POST /mcp", auth: "OAuth (connect your AgentData account) or Authorization: Bearer <API key>", docs: DOCS_URL, source: "https://github.com/nick-timms/agentdata-mcp-server" });
   });
 
   app.listen(port, host, () => {
-    console.log(`agentdata-mcp-server ${VERSION} listening on ${host}:${port} (POST /mcp, ${isLoopback ? "loopback only" : "public"})`);
+    console.log(`agentdata-mcp-server ${VERSION} listening on ${host}:${port} (POST /mcp)`);
   });
 }
 
-(httpMode ? startHttp() : startStdio()).catch((err) => {
+(httpMode ? startHttp() : startStdioBridge()).catch((err) => {
   console.error("Failed to start:", err);
   process.exit(1);
 });

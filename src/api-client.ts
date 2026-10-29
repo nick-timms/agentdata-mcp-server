@@ -1,25 +1,21 @@
 import { createRequire } from "node:module";
-import { createHmac } from "node:crypto";
-import type { Platform } from "./platform.js";
+import { createHash, createHmac } from "node:crypto";
 
 const require = createRequire(import.meta.url);
 const pkg = require("../package.json") as { version: string };
 
 export const VERSION: string = pkg.version;
-export const BASE_URL = process.env.AGENTDATA_API_URL || "https://agentdata.run/api/v1";
+/** The website's MCP data routes (useagentdata.com/api/mcp/v3). */
+export const BASE_URL = (process.env.AGENTDATA_API_URL || "https://useagentdata.com/api/mcp/v3").replace(/\/+$/, "");
 const TIMEOUT_MS = 30_000;
 
-/** Usage headers the API returns on every data response. */
+/** Usage headers the data routes return. */
 export interface Usage {
   plan?: string;
-  lookupsLimit?: number;
-  lookupsRemaining?: number;
-  lookupsConsumed?: number;
-  requestsLimit?: number;
-  requestsRemaining?: number;
-  requestsWindow?: string;
   companiesLimit?: number;
   companiesRemaining?: number;
+  requestsLimit?: number;
+  requestsRemaining?: number;
   retryAfter?: number;
 }
 
@@ -52,59 +48,38 @@ function num(h: Headers, name: string): number | undefined {
 export function readUsage(h: Headers): Usage {
   return {
     plan: h.get("x-plan") || undefined,
-    lookupsLimit: num(h, "x-lookups-limit"),
-    lookupsRemaining: num(h, "x-lookups-remaining"),
-    lookupsConsumed: num(h, "x-lookups-consumed"),
-    requestsLimit: num(h, "x-ratelimit-limit"),
-    requestsRemaining: num(h, "x-ratelimit-remaining"),
-    requestsWindow: h.get("x-ratelimit-window") || undefined,
     companiesLimit: num(h, "x-companies-limit"),
     companiesRemaining: num(h, "x-companies-remaining"),
+    requestsLimit: num(h, "x-ratelimit-limit"),
+    requestsRemaining: num(h, "x-ratelimit-remaining"),
     retryAfter: num(h, "retry-after"),
   };
 }
 
 export type Params = Record<string, string | number | boolean | undefined | null>;
 
-/** Who is calling the hosted server, when it is an AI platform (see platform.ts). */
-export interface Caller {
-  platform?: Platform | null;
+export function secret(): string {
+  const s = (process.env.MCP_V3_SECRET || "").trim();
+  if (s.length < 32) throw new Error("MCP_V3_SECRET is not set (at least 32 characters, the same value as on Vercel).");
+  return s;
 }
 
 /**
- * Thin fetch wrapper for the AgentData REST API. The key is optional: company,
- * technology, search and signal endpoints work without one (per-IP limits);
- * emails and people need a free key.
+ * Signed calls to the data routes. The caller's own credential is never forwarded (the MCP
+ * authorization spec forbids token passthrough): the server checks it once by introspection, then
+ * names the user in a signed header (claude/MCP_V3_SPEC_2026-10-29.md, section 4).
  */
 export class AgentDataClient {
-  private apiKey: string | undefined;
-  private clientIp: string | undefined;
+  /** The user id, or "-" for calls that need none (/facts). */
+  readonly user: string;
   private signal: AbortSignal | undefined;
-  private caller: Caller;
 
-  /**
-   * @param clientIp In HTTP mode, the caller's address. Forwarded to the API
-   *   with a timestamp, signed with MCP_PROXY_SECRET, so anonymous callers of
-   *   the hosted server are rate-limited individually instead of all sharing
-   *   this server's IP. The API accepts a signature for two minutes only.
-   * @param signal Aborted when the MCP client disconnects, so an abandoned
-   *   request stops costing the API.
-   * @param caller The AI platform behind the call, if any. Sent with the
-   *   address and covered by the same signature, so the API can count keyless
-   *   platform traffic in that platform's pool.
-   */
-  constructor(apiKey?: string, clientIp?: string, signal?: AbortSignal, caller: Caller = {}) {
-    this.apiKey = apiKey?.trim() || undefined;
-    this.clientIp = clientIp?.trim() || undefined;
+  constructor(user: string, signal?: AbortSignal) {
+    this.user = user;
     this.signal = signal;
-    this.caller = caller;
   }
 
-  get hasKey(): boolean {
-    return !!this.apiKey;
-  }
-
-  async get(path: string, params?: Params): Promise<ApiResponse> {
+  private async call(method: "GET" | "POST", path: string, params?: Params, json?: unknown): Promise<ApiResponse> {
     const url = new URL(`${BASE_URL}${path}`);
     if (params) {
       for (const [key, value] of Object.entries(params)) {
@@ -112,97 +87,50 @@ export class AgentDataClient {
         url.searchParams.set(key, String(value));
       }
     }
-
+    const body = json === undefined ? "" : JSON.stringify(json);
+    const ts = String(Math.floor(Date.now() / 1000));
+    const signed = `${this.user}|${ts}|${method}|${url.pathname}${url.search}|${createHash("sha256").update(body).digest("hex")}`;
     const headers: Record<string, string> = {
       Accept: "application/json",
       "User-Agent": `agentdata-mcp-server/${VERSION}`,
+      "X-AgentData-User": this.user,
+      "X-AgentData-Ts": ts,
+      "X-AgentData-Sig": createHmac("sha256", secret()).update(signed).digest("hex"),
     };
-    if (this.apiKey) headers.Authorization = `Bearer ${this.apiKey}`;
-    const secret = (process.env.MCP_PROXY_SECRET || "").trim();
-    if (this.clientIp && secret) {
-      const ts = String(Math.floor(Date.now() / 1000));
-      headers["X-AgentData-Client-IP"] = this.clientIp;
-      headers["X-AgentData-Client-Ts"] = ts;
-      const platform = this.caller.platform || null;
-      let signed = `${this.clientIp}|${ts}`;
-      if (platform) {
-        headers["X-AgentData-Client-Platform"] = platform;
-        signed = `${this.clientIp}|${ts}|${platform}|`;
-      }
-      headers["X-AgentData-Client-Sig"] = createHmac("sha256", secret).update(signed).digest("hex");
-    }
+    if (body) headers["Content-Type"] = "application/json";
 
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
     let response: Response;
     try {
       const signal = this.signal ? AbortSignal.any([controller.signal, this.signal]) : controller.signal;
-      response = await fetch(url.toString(), { headers, signal });
+      response = await fetch(url.toString(), { method, headers, body: body || undefined, signal });
     } catch (err) {
       clearTimeout(timer);
       const reason = this.signal?.aborted
         ? "the request was cancelled"
         : err instanceof Error && err.name === "AbortError" ? `timed out after ${TIMEOUT_MS / 1000}s` : (err instanceof Error ? err.message : String(err));
-      throw new Error(`Could not reach ${url.host} (${reason}). Check your network, then retry; status at https://agentdata.run/data`);
+      throw new Error(`Could not reach AgentData (${reason}). Retry in a moment.`);
     }
     clearTimeout(timer);
 
-    let body: Record<string, unknown> = {};
+    let parsed: Record<string, unknown> = {};
     const text = await response.text();
     if (text) {
-      try { body = JSON.parse(text) as Record<string, unknown>; } catch { body = { error: text.slice(0, 300) }; }
+      try { parsed = JSON.parse(text) as Record<string, unknown>; } catch { parsed = { error: text.slice(0, 300) }; }
     }
     const usage = readUsage(response.headers);
-    if (!response.ok) throw new ApiError(response.status, body, usage);
-    return { body, usage, status: response.status };
+    if (!response.ok) throw new ApiError(response.status, parsed, usage);
+    return { body: parsed, usage, status: response.status };
   }
 
-  // Company record. With a key: emails and people too, 1 contact reveal per
-  // domain per 30 days. Without one: the public profile, no reveal.
-  lookup(domain: string, params: { min_confidence?: number; verification_status?: string } = {}) {
-    return this.get("/lookup", { domain, ...params });
-  }
-
-  // Name or domain search. No key needed.
-  search(q: string) {
-    return this.get("/search", { q });
-  }
-
-  // Filtered company list. No key needed.
-  companies(params: Params) {
-    return this.get("/companies", params);
-  }
-
-  // People search: 1 reveal per company in the response. Key required.
-  people(params: Params) {
-    return this.get("/people", params);
-  }
-
-  // One person with their email: 1 reveal. Key required.
-  person(id: string) {
-    return this.get(`/people/${encodeURIComponent(id)}`);
-  }
-
-  // Technology index or companies using one technology. No key needed.
-  technologies(limit?: number) {
-    return this.get("/tech", { limit });
-  }
-  technology(slug: string, page?: number) {
-    return this.get(`/tech/${encodeURIComponent(slug)}`, { page });
-  }
-
-  // Tool adoption and removal signals. No key needed.
-  signals(params: Params) {
-    return this.get("/signals", params);
-  }
-
-  // People changing jobs: 1 reveal per company. Key required.
-  careerMoves(params: Params) {
-    return this.get("/career-moves", params);
-  }
-
-  // Plan and usage. Free, not counted.
-  me() {
-    return this.get("/me");
-  }
+  facts() { return this.call("GET", "/facts"); }
+  me() { return this.call("GET", "/me"); }
+  technologies(params: Params) { return this.call("GET", "/technologies", params); }
+  list(params: Params) { return this.call("GET", "/list", params); }
+  addList(tool: string) { return this.call("POST", "/lists", undefined, { tool }); }
+  newCustomers(params: Params) { return this.call("GET", "/new-customers", params); }
+  company(domain: string) { return this.call("GET", "/company", { domain }); }
+  download(tool: string, filters: Record<string, string>, confirm: boolean) { return this.call("POST", "/downloads", undefined, { tool, filters, confirm }); }
+  downloads() { return this.call("GET", "/downloads"); }
 }

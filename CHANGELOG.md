@@ -1,5 +1,20 @@
 # Changelog
 
+## 3.0.0
+
+Customer lists, connected to your AgentData account. A new address: `https://mcp.useagentdata.com/mcp`.
+
+- **An account is needed.** Claude and ChatGPT connect through OAuth: a page on useagentdata.com where you sign in or paste your API key. Developers can send `Authorization: Bearer <API key>` instead. Every request carries a credential, checked by the website; tokens are issued for this server only.
+- **New tools, built around customer lists:** `find_technologies`, `get_customer_list`, `get_new_customers`, `lookup_company`, `add_to_lists`, `download_list`, `check_usage`. Results match the website for the same plan: the same lists, filters, previews, limits and contacts rule.
+- **Removed:** `search_companies`, `find_people`, `get_person` and `get_signals`. People are part of company contacts in `lookup_company`; AgentData reports new customers (starts) only.
+- Where a technology was found is `found_in` (website, dns or header) with a plain `evidence` label.
+- Plan messages state the plan and point to useagentdata.com/pricing.
+- The npm package is now a stdio bridge to the hosted server, and needs `--api-key`.
+- Numbers in tool descriptions (rows a page, preview size and so on) are read from the website at start.
+
+The 2.x server at `mcp.agentdata.run` is switched off once this version is listed in ChatGPT.
+
+
 ## 2.2.1 (registry listing only)
 
 - server.json description now leads with company and technology data: "Free company data for AI agents: profiles, tech stacks with evidence, and tool changes. No sign-in." No code change; the npm package stays at 2.2.0.
